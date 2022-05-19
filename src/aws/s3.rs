@@ -1,5 +1,6 @@
 use crate::aws::AWS;
 use crate::provider::{FileHash, FileSize, StorageId};
+use crate::crypto::hash::ChunkedHash;
 use anyhow::Result;
 use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::ByteStream;
@@ -27,6 +28,7 @@ pub async fn s3_upload_file(
         .await?;
 
     let mut filesize = 0;
+    let mut hash = ChunkedHash::new();
     let mut parts = CompletedMultipartUpload::builder();
 
     // TODO abort upload if any piece fails
@@ -46,6 +48,9 @@ pub async fn s3_upload_file(
 
         filesize += buffer.len();
 
+        let chunk = buffer.freeze();
+        hash.update(chunk.to_owned());
+
         let upload_resp = aws
             .s3_client()
             .upload_part()
@@ -53,7 +58,7 @@ pub async fn s3_upload_file(
             .key(storage_id.to_owned())
             .part_number(partnum)
             .set_upload_id(start_resp.upload_id.to_owned())
-            .body(ByteStream::from(buffer.freeze()))
+            .body(ByteStream::from(chunk))
             .send()
             .await?;
 
@@ -80,8 +85,7 @@ pub async fn s3_upload_file(
             size: filesize as u64,
         },
         FileHash {
-            // TODO return correct data
-            hash: "foo".to_owned(),
+            hash: hex::encode(hash.finalize()),
         },
     ))
 }
