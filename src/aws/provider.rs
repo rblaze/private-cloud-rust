@@ -1,4 +1,6 @@
 use crate::aws::s3::s3_upload_file;
+use crate::crypto::hash::HashKey;
+use crate::crypto::master_key::MasterKey;
 use crate::provider::*;
 use anyhow::Result;
 use async_trait::async_trait;
@@ -14,6 +16,7 @@ struct AwsConfig {
     aws_region: String,
     aws_access_key_id: String,
     aws_secret_access_key: String,
+    master_key: String,
 }
 
 impl std::fmt::Debug for AwsConfig {
@@ -23,6 +26,7 @@ impl std::fmt::Debug for AwsConfig {
             .field("aws_region", &self.aws_region)
             .field("aws_access_key_id", &self.aws_access_key_id)
             .field("aws_secret_access_key", &"*****")
+            .field("master_key", &"*****")
             .finish()
     }
 }
@@ -34,6 +38,7 @@ pub fn create_aws_config() -> Result<CloudProviderConfig> {
         aws_region: "us-east-1".to_owned(),
         aws_access_key_id: std::env::var("KEYID")?,
         aws_secret_access_key: std::env::var("SECRETKEY")?,
+        master_key: std::env::var("MASTER_KEY")?,
     };
 
     let mut writer = BytesMut::with_capacity(1024).writer();
@@ -48,6 +53,8 @@ pub fn create_aws_config() -> Result<CloudProviderConfig> {
 pub struct AWS {
     bucket: String,
     s3_client: aws_sdk_s3::Client,
+    master_key: MasterKey,
+    file_hash_key: HashKey,
 }
 
 impl AWS {
@@ -57,6 +64,10 @@ impl AWS {
 
     pub(crate) fn s3_client(&self) -> &aws_sdk_s3::Client {
         &self.s3_client
+    }
+
+    pub(crate) fn file_hash_key(&self) -> &HashKey {
+        &self.file_hash_key
     }
 }
 
@@ -81,6 +92,8 @@ impl CloudProvider for AWS {
 }
 
 async fn aws_load_from_config(config: CloudProviderConfig) -> Result<AWS> {
+    crate::crypto::init();
+
     let aws_config: AwsConfig =
         serde_pickle::from_reader(config.data.reader(), serde_pickle::DeOptions::new())?;
 
@@ -98,8 +111,13 @@ async fn aws_load_from_config(config: CloudProviderConfig) -> Result<AWS> {
         .build();
     let s3_client = aws_sdk_s3::Client::new(&sdk_config);
 
+    let master_key = MasterKey::from(&aws_config.master_key)?;
+    let file_hash_key = HashKey::new(&master_key, 1, "filehash")?;
+
     Ok(AWS {
         bucket: aws_config.s3_bucket,
         s3_client,
+        master_key,
+        file_hash_key,
     })
 }

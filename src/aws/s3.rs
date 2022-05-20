@@ -1,6 +1,6 @@
 use crate::aws::AWS;
-use crate::provider::{FileHash, FileSize, StorageId};
 use crate::crypto::hash::ChunkedHash;
+use crate::provider::{FileHash, FileSize, StorageId};
 use anyhow::Result;
 use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::ByteStream;
@@ -28,7 +28,7 @@ pub async fn s3_upload_file(
         .await?;
 
     let mut filesize = 0;
-    let mut hash = ChunkedHash::new();
+    let mut hash = ChunkedHash::keyed(&aws.file_hash_key());
     let mut parts = CompletedMultipartUpload::builder();
 
     // TODO abort upload if any piece fails
