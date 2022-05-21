@@ -1,4 +1,4 @@
-use crate::aws::s3::s3_upload_file;
+use crate::aws::s3::{s3_download_file, s3_upload_file};
 use crate::crypto::hash::HashKey;
 use crate::crypto::master_key::MasterKey;
 use crate::provider::*;
@@ -83,11 +83,12 @@ impl CloudProvider for AWS {
 
     async fn download_file(
         &self,
-        _storage_id: &StorageId,
-        _expected_hash: &FileHash,
-        _path: &std::path::Path,
-    ) -> Result<FileSize> {
-        todo!()
+        storage_id: StorageId,
+        expected_hash: &FileHash,
+        expected_size: &FileSize,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        s3_download_file(self, storage_id, expected_hash, expected_size, path).await
     }
 }
 

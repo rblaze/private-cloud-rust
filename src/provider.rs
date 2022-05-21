@@ -35,8 +35,9 @@ pub trait CloudProvider {
     // Load file from cloud and save locally, check hash, return download size.
     async fn download_file(
         &self,
-        storage_id: &StorageId,
+        storage_id: StorageId,
         expected_hash: &FileHash,
+        expected_size: &FileSize,
         path: &std::path::Path,
-    ) -> Result<FileSize>;
+    ) -> Result<()>;
 }

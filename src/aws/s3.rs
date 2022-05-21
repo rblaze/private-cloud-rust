@@ -1,12 +1,13 @@
 use crate::aws::AWS;
 use crate::crypto::hash::ChunkedHash;
 use crate::provider::{FileHash, FileSize, StorageId};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use aws_sdk_s3::model::{CompletedMultipartUpload, CompletedPart};
 use aws_sdk_s3::types::ByteStream;
 use bytes::BytesMut;
-use tokio::fs::File;
-use tokio::io::AsyncReadExt;
+use tokio::fs::{remove_file, File};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_stream::StreamExt;
 use uuid::Uuid;
 
 const CHUNK_SIZE: usize = 100 * 1024 * 1024;
@@ -88,4 +89,67 @@ pub async fn s3_upload_file(
             hash: hex::encode(hash.finalize()),
         },
     ))
+}
+
+pub async fn s3_download_file(
+    aws: &AWS,
+    storage_id: StorageId,
+    expected_hash: &FileHash,
+    expected_size: &FileSize,
+    path: &std::path::Path,
+) -> Result<()> {
+    let result = s3_download_file_impl(aws, storage_id, expected_hash, expected_size, path).await;
+
+    // Cleanup failed downloads
+    if let Err(_) = result {
+        let _ = remove_file(path).await;
+    }
+
+    result
+}
+
+async fn s3_download_file_impl(
+    aws: &AWS,
+    storage_id: StorageId,
+    expected_hash: &FileHash,
+    expected_size: &FileSize,
+    path: &std::path::Path,
+) -> Result<()> {
+    let mut resp = aws
+        .s3_client()
+        .get_object()
+        .bucket(aws.bucket().to_owned())
+        .key(storage_id.id)
+        .send()
+        .await?;
+
+    if resp.content_length() < 0 || resp.content_length() as u64 != expected_size.size {
+        return Err(anyhow!(
+            "File size mismatch: expected {}, got {}",
+            expected_size.size,
+            resp.content_length(),
+        ));
+    }
+
+    let mut hash = ChunkedHash::keyed(&aws.file_hash_key());
+    let mut file = File::create(path).await?;
+
+    while let Some(mut bytes) = resp.body.try_next().await? {
+        hash.update(bytes.clone());
+        file.write_all_buf(&mut bytes).await?;
+    }
+
+    file.flush().await?;
+
+    let actual_hash = hex::encode(hash.finalize());
+
+    if actual_hash != expected_hash.hash {
+        return Err(anyhow!(
+            "File hash mismatch: expected {}, got {}",
+            expected_hash.hash,
+            actual_hash,
+        ));
+    }
+
+    Ok(())
 }

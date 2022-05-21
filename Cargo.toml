@@ -20,4 +20,5 @@ libsodium-sys-stable = { version = "1.19", features = ["minimal", "optimized"] }
 serde = { version = "1.0", features = ["derive"] }
 serde-pickle = "1.0"
 tokio = { version = "1.18", features = ["full"] }
+tokio-stream = "0.1"
 uuid = { version = "1.0", features = ["v4"] }
