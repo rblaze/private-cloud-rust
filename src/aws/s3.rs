@@ -28,11 +28,47 @@ pub async fn s3_upload_file(
         .send()
         .await?;
 
+    match send_parts(aws, &mut file, &storage_id, &start_resp.upload_id).await {
+        Ok((parts, size, hash)) => {
+            aws.s3_client()
+                .complete_multipart_upload()
+                .bucket(aws.bucket().to_owned())
+                .key(storage_id.to_owned())
+                .set_upload_id(start_resp.upload_id)
+                .multipart_upload(parts)
+                .send()
+                .await?;
+
+            Ok((StorageId { id: storage_id }, size, hash))
+        }
+        Err(e) => {
+            if let Err(_) = aws
+                .s3_client()
+                .abort_multipart_upload()
+                .bucket(aws.bucket().to_owned())
+                .key(storage_id.to_owned())
+                .set_upload_id(start_resp.upload_id)
+                .send()
+                .await
+            {
+                // TODO log something
+            }
+
+            Err(e)
+        }
+    }
+}
+
+async fn send_parts(
+    aws: &AWS,
+    file: &mut File,
+    storage_id: &String,
+    upload_id: &Option<String>,
+) -> Result<(CompletedMultipartUpload, FileSize, FileHash)> {
     let mut filesize = 0;
     let mut hash = ChunkedHash::keyed(&aws.file_hash_key());
     let mut parts = CompletedMultipartUpload::builder();
 
-    // TODO abort upload if any piece fails
     for partnum in 1.. {
         let mut buffer = BytesMut::with_capacity(CHUNK_SIZE);
 
@@ -58,7 +94,7 @@ pub async fn s3_upload_file(
             .bucket(aws.bucket().to_owned())
             .key(storage_id.to_owned())
             .part_number(partnum)
-            .set_upload_id(start_resp.upload_id.to_owned())
+            .set_upload_id(upload_id.to_owned())
             .body(ByteStream::from(chunk))
             .send()
             .await?;
@@ -71,17 +107,8 @@ pub async fn s3_upload_file(
         );
     }
 
-    aws.s3_client()
-        .complete_multipart_upload()
-        .bucket(aws.bucket().to_owned())
-        .key(storage_id.to_owned())
-        .set_upload_id(start_resp.upload_id.to_owned())
-        .multipart_upload(parts.build())
-        .send()
-        .await?;
-
     Ok((
-        StorageId { id: storage_id },
+        parts.build(),
         FileSize {
             size: filesize as u64,
         },
@@ -102,7 +129,9 @@ pub async fn s3_download_file(
 
     // Cleanup failed downloads
     if let Err(_) = result {
-        let _ = remove_file(path).await;
+        if let Err(_) = remove_file(path).await {
+            // TODO log something
+        }
     }
 
     result
