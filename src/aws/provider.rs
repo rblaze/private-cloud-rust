@@ -4,11 +4,15 @@ use crate::crypto::master_key::MasterKey;
 use crate::provider::*;
 use anyhow::Result;
 use async_trait::async_trait;
+use aws_config::RetryConfig;
+use aws_smithy_async::rt::sleep::TokioSleep;
+use aws_types::app_name::AppName;
 use aws_types::credentials::SharedCredentialsProvider;
 use aws_types::region::Region;
 use aws_types::{Credentials, SdkConfig};
 use bytes::{Buf, BufMut, BytesMut};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 #[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 struct AwsConfig {
@@ -31,6 +35,7 @@ impl std::fmt::Debug for AwsConfig {
     }
 }
 
+#[instrument]
 pub fn create_aws_config() -> Result<CloudProviderConfig> {
     // TODO build config in smart way
     let config = AwsConfig {
@@ -92,6 +97,7 @@ impl CloudProvider for AWS {
     }
 }
 
+#[instrument]
 async fn aws_load_from_config(config: CloudProviderConfig) -> Result<AWS> {
     crate::crypto::init();
 
@@ -107,10 +113,15 @@ async fn aws_load_from_config(config: CloudProviderConfig) -> Result<AWS> {
     );
 
     let sdk_config = SdkConfig::builder()
+        .app_name(AppName::new("PrivateCloud")?)
         .credentials_provider(SharedCredentialsProvider::new(creds))
         .region(Region::new(aws_config.aws_region))
+        .retry_config(RetryConfig::new())
         .build();
-    let s3_client = aws_sdk_s3::Client::new(&sdk_config);
+    let s3_config = aws_sdk_s3::config::Builder::from(&sdk_config)
+        .sleep_impl(std::sync::Arc::new(TokioSleep::new()))
+        .build();
+    let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
 
     let master_key = MasterKey::from(&aws_config.master_key)?;
     let file_hash_key = HashKey::new(&master_key, 1, "filehash")?;
